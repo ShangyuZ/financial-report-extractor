@@ -1,0 +1,76 @@
+{
+  "company": {
+    "name": "Zephyr Software Inc.",
+    "ticker": "ZPHY",
+    "sector": "Technology Software",
+    "fiscal_year": "2024",
+    "currency": "USD",
+    "period": "FY2024"
+  },
+  "income_statement": {
+    "revenue": 1284.5,
+    "gross_profit": 924.8,
+    "ebitda": 282.6,
+    "ebit": 198.1,
+    "net_income": 154.3,
+    "eps_diluted": 3.12,
+    "gross_margin": 72.0,
+    "ebitda_margin": 22.0,
+    "net_margin": 12.0
+  },
+  "balance_sheet": {
+    "total_assets": 1199.0,
+    "total_debt": 300.0,
+    "cash_and_equivalents": 312.8,
+    "net_debt": -12.8,
+    "total_equity": 501.8,
+    "working_capital": 280.0
+  },
+  "cash_flow": {
+    "operating_cash_flow": 291.1,
+    "capex": 42.6,
+    "free_cash_flow": 248.5,
+    "dividends_paid": 0.0
+  },
+  "yoy_changes": {
+    "revenue": 22.7,
+    "ebitda": 35.0,
+    "net_income": 45.8,
+    "eps_diluted": 43.1
+  },
+  "segments": [
+    {
+      "name": "Zephyr Core (Workflow Automation)",
+      "revenue": 641.3,
+      "operating_income": 192.4,
+      "revenue_growth_yoy": 28.7
+    },
+    {
+      "name": "DataBridge (Integration Platform)",
+      "revenue": 385.4,
+      "operating_income": 96.4,
+      "revenue_growth_yoy": 19.3
+    },
+    {
+      "name": "Analytics Cloud",
+      "revenue": 180.2,
+      "operating_income": 54.1,
+      "revenue_growth_yoy": 21.6
+    },
+    {
+      "name": "Professional Services",
+      "revenue": 77.6,
+      "operating_income": -8.2,
+      "revenue_growth_yoy": 0.1
+    }
+  ],
+  "guidance": {
+    "revenue_low": 1490.0,
+    "revenue_high": 1540.0,
+    "ebitda_low": 343.0,
+    "ebitda_high": 370.0,
+    "eps_low": 3.55,
+    "eps_high": 3.80,
+    "commentary": "FY2025 guidance reflects continued strong demand for the Zephyr Core platform, accelerating adoption in the European mid-market, and expected contribution from the Analytics Cloud enterprise tier launched in Q4 2024. Guidance assumes no further acquisitions and is presented on a constant-currency basis. Macroeconomic uncertainty and elongated enterprise sales cycles represent the primary downside risks to the outlook."
+  }
+}

@@ -1,0 +1,19 @@
+# Environment — never commit API keys
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python
+
+# Generated output — produced at runtime, not committed
+financial_api/data/
+
+# Input reports — user-provided, not committed
+financial_api/reports/*
+!financial_api/reports/.gitkeep
+
+# macOS
+.DS_Store
