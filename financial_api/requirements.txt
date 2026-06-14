@@ -1,3 +1,11 @@
-anthropic>=0.28.0
-pydantic>=2.0.0
-pypdf>=4.0.0
+# Core — Claude API client
+anthropic>=0.28.0,<1.0.0
+
+# Schema validation and derived-field computation
+pydantic>=2.0.0,<3.0.0
+
+# PDF text extraction (optional — only needed for --file *.pdf)
+pypdf>=4.0.0,<6.0.0
+
+# Development / testing (not required at runtime)
+# pytest>=8.0.0

@@ -1,11 +1,19 @@
-import os
-import json
-import re
+"""
+extractor.py — Claude API call, prompt, response parsing, and retry logic.
+"""
+from __future__ import annotations
+
 import base64
-from pathlib import Path
+import json
+import logging
+import os
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from app.models import FinancialData
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_HINT = """
 {
@@ -125,16 +133,20 @@ RULES:
 
 @dataclass
 class ExtractionResult:
+    """Result of a single financial extraction pass."""
+
     financials: dict
     metadata: dict
     extraction_warnings: list[str] = field(default_factory=list)
 
 
 def _build_prompt(text: str) -> str:
+    """Assemble the full extraction prompt from a report text string."""
     return _PROMPT_TEMPLATE.format(schema=SCHEMA_HINT) + f"\nReport text:\n{text}"
 
 
 def _parse_response(raw: str) -> dict:
+    """Strip optional markdown fences and parse the JSON response."""
     raw = raw.strip()
     raw = re.sub(r"^```[a-z]*\s*\n?", "", raw)
     raw = re.sub(r"\n?```\s*$", "", raw)
@@ -142,6 +154,7 @@ def _parse_response(raw: str) -> dict:
 
 
 def _finalise(parsed: dict) -> ExtractionResult:
+    """Validate the parsed response against the Pydantic schema and return an ExtractionResult."""
     if "financials" not in parsed:
         raise ValueError("Extraction response is missing the 'financials' key.")
     validated = FinancialData.model_validate(parsed["financials"])
@@ -152,8 +165,10 @@ def _finalise(parsed: dict) -> ExtractionResult:
     )
 
 
-def _call_api(client, model: str, messages: list) -> str:
-    message = client.messages.create(
+def _call_api(client: object, model: str, messages: list[dict]) -> str:
+    """Send a single request to the Claude messages API and return the text response."""
+    logger.debug("Calling Claude API: model=%s, messages=%d", model, len(messages))
+    message = client.messages.create(  # type: ignore[attr-defined]
         model=model,
         max_tokens=2500,
         temperature=0,
@@ -164,23 +179,26 @@ def _call_api(client, model: str, messages: list) -> str:
             "Extraction truncated due to token limit. "
             "Try shorter input or split the document."
         )
+    logger.debug("API response received: stop_reason=%s", message.stop_reason)
     return message.content[0].text
 
 
-def _with_retry(client, model: str, messages: list) -> dict:
+def _with_retry(client: object, model: str, messages: list[dict]) -> dict:
+    """Call the API and retry once on JSON parse failure."""
     raw = _call_api(client, model, messages)
     try:
         return _parse_response(raw)
     except json.JSONDecodeError:
+        logger.warning("JSON parse failed on first attempt — retrying once")
         # Single retry — occasional structured output failures recover on a second attempt
         raw = _call_api(client, model, messages)
         try:
             return _parse_response(raw)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Claude returned invalid JSON after retry: {e}\n\nRaw response:\n{raw}")
+            raise ValueError(f"Claude returned invalid JSON after retry: {e}\n\nRaw response:\n{raw}") from e
 
 
-EXPECTED_METADATA_KEYS = {
+EXPECTED_METADATA_KEYS: frozenset[str] = frozenset({
     "company.name",
     "company.ticker",
     "company.fiscal_year",
@@ -206,27 +224,61 @@ EXPECTED_METADATA_KEYS = {
     "guidance.revenue_high",
     "guidance.eps_low",
     "guidance.eps_high",
-}
+})
 
-VALID_STATUSES = {"extracted", "derived", "missing"}
+VALID_STATUSES: frozenset[str] = frozenset({"extracted", "derived", "missing"})
 
 
 def extract(text: str, model: str = "claude-haiku-4-5-20251001") -> ExtractionResult:
+    """Extract financial data from a plain-text report string.
+
+    Args:
+        text:  The full text of the financial report.
+        model: Claude model identifier to use for extraction.
+
+    Returns:
+        An :class:`ExtractionResult` containing validated financials, metadata,
+        and any extraction warnings.
+
+    Raises:
+        EnvironmentError: If ``ANTHROPIC_API_KEY`` is not set.
+        ValueError: If the API returns invalid JSON or the response schema is wrong.
+    """
     import anthropic
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise EnvironmentError("ANTHROPIC_API_KEY is not set.")
 
+    logger.info("Starting text extraction: model=%s, text_length=%d", model, len(text))
     client = anthropic.Anthropic(api_key=api_key)
     prompt = _build_prompt(text)
-    messages = [{"role": "user", "content": prompt}]
+    messages: list[dict] = [{"role": "user", "content": prompt}]
     parsed = _with_retry(client, model, messages)
-    return _finalise(parsed)
+    result = _finalise(parsed)
+    logger.info(
+        "Extraction complete: %d warnings",
+        len(result.extraction_warnings),
+    )
+    return result
 
 
 def extract_from_image(image_path: str, model: str = "claude-haiku-4-5-20251001") -> ExtractionResult:
-    """Extract financial data from an image file (PNG, JPG, JPEG)."""
+    """Extract financial data from an image file (PNG, JPG, JPEG).
+
+    Args:
+        image_path: Absolute or relative path to the image file.
+        model:      Claude model identifier to use (must support vision).
+
+    Returns:
+        An :class:`ExtractionResult` containing validated financials, metadata,
+        and any extraction warnings.
+
+    Raises:
+        EnvironmentError: If ``ANTHROPIC_API_KEY`` is not set.
+        ValueError: If the file format is unsupported or the API returns invalid JSON.
+        OSError:    If the image file cannot be read.
+    """
     import anthropic
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -235,18 +287,19 @@ def extract_from_image(image_path: str, model: str = "claude-haiku-4-5-20251001"
 
     path = Path(image_path)
     suffix = path.suffix.lower()
-    media_type_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+    media_type_map: dict[str, str] = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
     media_type = media_type_map.get(suffix)
     if not media_type:
         raise ValueError(f"Unsupported image format: {suffix}. Supported: .png, .jpg, .jpeg")
 
+    logger.info("Starting image extraction: path=%s, model=%s", image_path, model)
     with open(image_path, "rb") as f:
         image_data = base64.standard_b64encode(f.read()).decode("utf-8")
 
     client = anthropic.Anthropic(api_key=api_key)
     prompt_text = _PROMPT_TEMPLATE.format(schema=SCHEMA_HINT)
 
-    messages = [{
+    messages: list[dict] = [{
         "role": "user",
         "content": [
             {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_data}},
@@ -254,4 +307,9 @@ def extract_from_image(image_path: str, model: str = "claude-haiku-4-5-20251001"
         ],
     }]
     parsed = _with_retry(client, model, messages)
-    return _finalise(parsed)
+    result = _finalise(parsed)
+    logger.info(
+        "Image extraction complete: %d warnings",
+        len(result.extraction_warnings),
+    )
+    return result

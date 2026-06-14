@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r financial_api/requirements.txt
+          pip install pytest
+
+      - name: Syntax check — extractor
+        run: python -m py_compile financial_api/app/extractor.py
+
+      - name: Syntax check — models
+        run: python -m py_compile financial_api/app/models.py
+
+      - name: Syntax check — validators
+        run: python -m py_compile financial_api/app/validators.py
+
+      - name: Syntax check — CLI
+        run: python -m py_compile financial_api/extract.py
+
+      - name: Import check
+        run: |
+          cd financial_api
+          python -c "from app.extractor import ExtractionResult, EXPECTED_METADATA_KEYS, VALID_STATUSES; from app.models import FinancialData; from app.validators import validate_financial_data; print('imports OK')"
+
+      - name: Unit tests
+        run: |
+          cd financial_api
+          python -m pytest tests/ -v --tb=short

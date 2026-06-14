@@ -11,12 +11,18 @@ Supported input formats:
 Additional modes:
   --batch                    Process every file in reports/ and print a summary table
   --compare A.json B.json    Load two extracted JSONs and print a YoY delta table
+
+Verbosity:
+  --verbose                  Enable DEBUG-level logging
+  --quiet                    Suppress all stderr output except errors
 """
+from __future__ import annotations
 
 import argparse
 import csv
 import io
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -35,39 +41,84 @@ sys.path.insert(0, str(Path(__file__).parent))
 from app.extractor import extract, extract_from_image, EXPECTED_METADATA_KEYS, VALID_STATUSES
 from app.validators import validate_financial_data
 
-_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
-_PDF_SUFFIX = ".pdf"
-_SUPPORTED_SUFFIXES = _IMAGE_SUFFIXES | {_PDF_SUFFIX, ".txt"}
+logger = logging.getLogger(__name__)
+
+_IMAGE_SUFFIXES: frozenset[str] = frozenset({".png", ".jpg", ".jpeg"})
+_PDF_SUFFIX: str = ".pdf"
+_SUPPORTED_SUFFIXES: frozenset[str] = _IMAGE_SUFFIXES | frozenset({_PDF_SUFFIX, ".txt"})
+
+
+def _configure_logging(verbose: bool, quiet: bool) -> None:
+    """Configure root logger based on verbosity flags.
+
+    Args:
+        verbose: If True, set level to DEBUG.
+        quiet:   If True, set level to ERROR (suppress INFO/WARNING).
+    """
+    if verbose:
+        level = logging.DEBUG
+    elif quiet:
+        level = logging.ERROR
+    else:
+        level = logging.WARNING
+
+    logging.basicConfig(
+        format="%(levelname)s %(name)s: %(message)s",
+        level=level,
+        stream=sys.stderr,
+    )
 
 
 def _pdf_to_text(path: Path) -> str:
+    """Extract text from a PDF file using pypdf.
+
+    Args:
+        path: Path to the PDF file.
+
+    Returns:
+        Concatenated text from all pages, joined by double newlines.
+
+    Raises:
+        SystemExit: If pypdf is not installed.
+    """
     try:
         import pypdf
     except ImportError:
         print("Error: pypdf is required for PDF support. Install with: pip install pypdf", file=sys.stderr)
         sys.exit(1)
     reader = pypdf.PdfReader(str(path))
-    pages = [page.extract_text() or "" for page in reader.pages]
+    pages: list[str] = [page.extract_text() or "" for page in reader.pages]
     return "\n\n".join(pages)
 
 
-def _run_extraction(path: Path, model: str) -> tuple[dict, list[str], list[str], list[str]]:
-    """Extract financials from a single file. Returns (data, extraction_warnings, val_warnings, val_errors)."""
+def _run_extraction(
+    path: Path, model: str
+) -> tuple[dict, list[str], list[str], list[str]]:
+    """Extract financials from a single file.
+
+    Args:
+        path:  Path to the input file (.txt, .pdf, .png, .jpg, .jpeg).
+        model: Claude model identifier.
+
+    Returns:
+        A 4-tuple of ``(financials_dict, extraction_warnings, validation_warnings, validation_errors)``.
+    """
     suffix = path.suffix.lower()
     is_image = suffix in _IMAGE_SUFFIXES
 
     if suffix == _PDF_SUFFIX:
-        print(f"  Detected PDF — extracting text...", file=sys.stderr)
-        text = _pdf_to_text(path)
+        logger.info("Detected PDF — extracting text: %s", path.name)
+        text: str | None = _pdf_to_text(path)
     elif is_image:
         text = None
     else:
         text = path.read_text(encoding="utf-8")
 
     if is_image:
-        print(f"  Detected image — sending to Claude vision...", file=sys.stderr)
+        logger.info("Detected image — sending to Claude vision: %s", path.name)
         result = extract_from_image(str(path), model=model)
     else:
+        assert text is not None
         result = extract(text, model=model)
 
     data = result.financials
@@ -83,9 +134,21 @@ def _save_outputs(
     out_dir: Path,
     export_csv: bool,
 ) -> tuple[Path, Path]:
-    """Write JSON (and optionally CSV) outputs. Returns (json_path, artifact_path)."""
-    ticker = (data.get("company") or {}).get("ticker") or "UNKNOWN"
-    fy = (data.get("company") or {}).get("fiscal_year") or "UNKNOWN"
+    """Write JSON (and optionally CSV) outputs to disk.
+
+    Args:
+        data:                       Validated financials dict.
+        result_extraction_warnings: Warnings raised by the Claude extraction step.
+        val_warnings:               Advisory warnings from the validator.
+        val_errors:                 Blocking errors from the validator.
+        out_dir:                    Target directory (created if absent).
+        export_csv:                 If True, also write a flattened CSV.
+
+    Returns:
+        A ``(json_path, artifact_path)`` tuple of the written files.
+    """
+    ticker: str = (data.get("company") or {}).get("ticker") or "UNKNOWN"
+    fy: str = (data.get("company") or {}).get("fiscal_year") or "UNKNOWN"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     output_json = json.dumps(data, indent=2)
@@ -93,7 +156,7 @@ def _save_outputs(
     json_path = out_dir / f"{ticker}_{fy}.json"
     json_path.write_text(output_json, encoding="utf-8")
 
-    artifact = {
+    artifact: dict = {
         "financials": data,
         "extraction_warnings": result_extraction_warnings,
         "validation_warnings": val_warnings,
@@ -105,13 +168,18 @@ def _save_outputs(
     if export_csv:
         csv_path = out_dir / f"{ticker}_{fy}.csv"
         _write_csv(data, csv_path)
-        print(f"  CSV: {csv_path}", file=sys.stderr)
+        logger.info("CSV written: %s", csv_path)
 
     return json_path, artifact_path
 
 
 def _write_csv(data: dict, path: Path) -> None:
-    """Flatten the financials dict to a two-column CSV (field, value)."""
+    """Flatten the financials dict to a two-column CSV (field, value).
+
+    Args:
+        data: The financials dict to flatten.
+        path: Destination file path.
+    """
     rows: list[tuple[str, object]] = []
 
     def _flatten(obj: object, prefix: str = "") -> None:
@@ -134,7 +202,12 @@ def _write_csv(data: dict, path: Path) -> None:
 
 
 def _print_coverage(metadata: dict) -> None:
-    counts = {"extracted": 0, "derived": 0, "missing": 0}
+    """Print a concise field-coverage summary to stderr.
+
+    Args:
+        metadata: The metadata dict from an :class:`ExtractionResult`.
+    """
+    counts: dict[str, int] = {"extracted": 0, "derived": 0, "missing": 0}
     for key in EXPECTED_METADATA_KEYS:
         status = (metadata.get(key) or {}).get("status")
         if status in counts:
@@ -151,8 +224,15 @@ def _print_coverage(metadata: dict) -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _batch(reports_dir: Path, out_dir: Path, model: str, export_csv: bool) -> None:
-    """Process all supported files in reports_dir and print a summary table."""
-    files = sorted(
+    """Process all supported files in ``reports_dir`` and print a summary table.
+
+    Args:
+        reports_dir: Directory to scan for supported input files.
+        out_dir:     Directory where output files are written.
+        model:       Claude model identifier.
+        export_csv:  If True, also write a flattened CSV per file.
+    """
+    files: list[Path] = sorted(
         p for p in reports_dir.iterdir()
         if p.is_file() and p.suffix.lower() in _SUPPORTED_SUFFIXES
     )
@@ -168,9 +248,9 @@ def _batch(reports_dir: Path, out_dir: Path, model: str, export_csv: bool) -> No
         print(f"Processing: {f.name}", file=sys.stderr)
         try:
             data, ext_warnings, val_warnings, val_errors = _run_extraction(f, model)
-            co = data.get("company") or {}
-            inc = data.get("income_statement") or {}
-            row = {
+            co: dict = data.get("company") or {}
+            inc: dict = data.get("income_statement") or {}
+            row: dict = {
                 "file": f.name,
                 "company": co.get("name") or "—",
                 "ticker": co.get("ticker") or "—",
@@ -189,11 +269,14 @@ def _batch(reports_dir: Path, out_dir: Path, model: str, export_csv: bool) -> No
                              "revenue": None, "ebitda_margin": None, "net_income": None,
                              "status": "FAIL", "warnings": 0})
             print(f"  Failed: {e}", file=sys.stderr)
+            logger.exception("Batch extraction failed for %s", f.name)
         print("", file=sys.stderr)
 
     # Print summary table
-    col_w = {"file": 30, "company": 22, "ticker": 8, "period": 10,
-              "revenue": 12, "ebitda_margin": 14, "status": 12, "warnings": 8}
+    col_w: dict[str, int] = {
+        "file": 30, "company": 22, "ticker": 8, "period": 10,
+        "revenue": 12, "ebitda_margin": 14, "status": 12, "warnings": 8,
+    }
 
     def _cell(v: object, w: int) -> str:
         s = "—" if v is None else (f"{v:,.1f}" if isinstance(v, float) else str(v))
@@ -256,10 +339,15 @@ _COMPARE_FIELDS: list[tuple[str, str, str]] = [
 
 
 def _compare(path_a: Path, path_b: Path) -> None:
-    """Load two extracted JSON files and print a side-by-side YoY delta table."""
+    """Load two extracted JSON files and print a side-by-side YoY delta table.
+
+    Args:
+        path_a: Path to the earlier-period JSON (e.g. FY2023).
+        path_b: Path to the later-period JSON (e.g. FY2024).
+    """
     try:
-        data_a = json.loads(path_a.read_text(encoding="utf-8"))
-        data_b = json.loads(path_b.read_text(encoding="utf-8"))
+        data_a: dict = json.loads(path_a.read_text(encoding="utf-8"))
+        data_b: dict = json.loads(path_b.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         print(f"Error reading JSON: {e}", file=sys.stderr)
         sys.exit(1)
@@ -270,8 +358,8 @@ def _compare(path_a: Path, path_b: Path) -> None:
     if "financials" in data_b:
         data_b = data_b["financials"]
 
-    co_a = data_a.get("company") or {}
-    co_b = data_b.get("company") or {}
+    co_a: dict = data_a.get("company") or {}
+    co_b: dict = data_b.get("company") or {}
 
     label_a = f"{co_a.get('ticker') or co_a.get('name', path_a.stem)} {co_a.get('period') or co_a.get('fiscal_year', '')}"
     label_b = f"{co_b.get('ticker') or co_b.get('name', path_b.stem)} {co_b.get('period') or co_b.get('fiscal_year', '')}"
@@ -328,6 +416,7 @@ def _compare(path_a: Path, path_b: Path) -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    """Entry point for the extract CLI."""
     parser = argparse.ArgumentParser(
         description=(
             "Extract financial data from a report and produce structured financial JSON. "
@@ -367,7 +456,22 @@ def main() -> None:
         default="claude-haiku-4-5-20251001",
         help="Claude model to use (default: claude-haiku-4-5-20251001). Use claude-sonnet-4-6 for higher accuracy.",
     )
+
+    verbosity = parser.add_mutually_exclusive_group()
+    verbosity.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable DEBUG-level logging to stderr",
+    )
+    verbosity.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress all stderr output except errors",
+    )
+
     args = parser.parse_args()
+
+    _configure_logging(verbose=args.verbose, quiet=args.quiet)
 
     # Resolve output directory
     default_out = Path(__file__).parent / "data"
@@ -399,6 +503,7 @@ def main() -> None:
     # Read input and extract
     is_image = False
     path: Path | None = None
+    text: str | None = None
     if args.file:
         path = Path(args.file)
         if not path.exists():
@@ -406,11 +511,10 @@ def main() -> None:
             sys.exit(1)
         suffix = path.suffix.lower()
         if suffix == _PDF_SUFFIX:
-            print(f"Detected PDF — extracting text...", file=sys.stderr)
+            logger.info("Detected PDF — extracting text: %s", path.name)
             text = _pdf_to_text(path)
         elif suffix in _IMAGE_SUFFIXES:
             is_image = True
-            text = None
         else:
             text = path.read_text(encoding="utf-8")
     else:
@@ -418,9 +522,11 @@ def main() -> None:
 
     try:
         if is_image:
-            print(f"Detected image — sending to Claude vision...", file=sys.stderr)
+            assert path is not None
+            logger.info("Detected image — sending to Claude vision: %s", path.name)
             result = extract_from_image(str(path), model=args.model)
         else:
+            assert text is not None
             result = extract(text, model=args.model)
     except ValueError as e:
         print(f"Extraction failed:\n{e}", file=sys.stderr)
@@ -438,14 +544,14 @@ def main() -> None:
     # Validate metadata structure
     for key in EXPECTED_METADATA_KEYS:
         if key not in result.metadata:
-            print(f"[WARN] Metadata missing key: {key}", file=sys.stderr)
+            logger.warning("Metadata missing key: %s", key)
         else:
             status = result.metadata[key].get("status")
             if status not in VALID_STATUSES:
-                print(f"[WARN] Metadata invalid status for {key}: {status!r}", file=sys.stderr)
+                logger.warning("Metadata invalid status for %s: %r", key, status)
 
     # Coverage summary
-    counts = {"extracted": 0, "derived": 0, "missing": 0}
+    counts: dict[str, int] = {"extracted": 0, "derived": 0, "missing": 0}
     for key in EXPECTED_METADATA_KEYS:
         status = (result.metadata.get(key) or {}).get("status")
         if status in counts:
