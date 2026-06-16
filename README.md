@@ -1,5 +1,9 @@
 # Financial Report Extractor
 
+![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-green)
+![CI](https://github.com/ShangyuZ/financial-report-extractor/actions/workflows/ci.yml/badge.svg)
+
 Turn raw financial reports into clean, validated, machine-readable JSON, powered by Claude AI.
 
 ---

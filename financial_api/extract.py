@@ -456,6 +456,15 @@ def main() -> None:
         default="claude-haiku-4-5-20251001",
         help="Claude model to use (default: claude-haiku-4-5-20251001). Use claude-sonnet-4-6 for higher accuracy.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Parse and validate the input file without calling the Claude API or writing output. "
+            "Prints the detected format, resolved output paths, and a preview of the text to be sent."
+        ),
+    )
 
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument(
@@ -499,6 +508,32 @@ def main() -> None:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("Error: ANTHROPIC_API_KEY environment variable is not set.", file=sys.stderr)
         sys.exit(1)
+
+    # --dry-run: validate input and show what would happen without calling the API
+    if args.dry_run:
+        if not args.file and not args.text:
+            parser.error("--dry-run requires --file or --text")
+        fmt = "inline text" if args.text else Path(args.file).suffix.lower().lstrip(".")
+        print(f"[DRY RUN] Input format : {fmt}")
+        print(f"[DRY RUN] Model        : {args.model}")
+        print(f"[DRY RUN] Output dir   : {out_dir}")
+        print(f"[DRY RUN] CSV export   : {args.export_csv}")
+        if args.file:
+            path = Path(args.file)
+            if not path.exists():
+                print(f"[DRY RUN] ERROR: file not found: {args.file}", file=sys.stderr)
+                sys.exit(1)
+            if path.suffix.lower() == _PDF_SUFFIX:
+                preview = _pdf_to_text(path)[:500]
+            elif path.suffix.lower() in _IMAGE_SUFFIXES:
+                preview = f"<image file: {path.name}, {path.stat().st_size // 1024} KB>"
+            else:
+                preview = path.read_text(encoding="utf-8")[:500]
+        else:
+            preview = (args.text or "")[:500]
+        print(f"\n[DRY RUN] Text preview (first 500 chars):\n{preview}")
+        print("\n[DRY RUN] No API call made. Remove --dry-run to extract.")
+        return
 
     # Read input and extract
     is_image = False
