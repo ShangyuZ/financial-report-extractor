@@ -51,6 +51,24 @@ cp .env.example .env          # paste your Anthropic API key
 
 Output is saved to `financial_api/data/`.
 
+## REST API
+
+The extractor is also available as an HTTP service (FastAPI):
+
+```bash
+cd financial_api
+pip install -r requirements.txt
+uvicorn app.api:app --reload --port 8000
+```
+
+| Method | Endpoint           | Purpose                                        |
+|--------|--------------------|------------------------------------------------|
+| GET    | `/health`          | Liveness probe; reports API-key configuration  |
+| POST   | `/extract`         | Extract financials from raw report text        |
+| POST   | `/extract/compare` | Compute YoY deltas between two extracted payloads |
+
+Interactive docs auto-generated at `http://localhost:8000/docs`.
+
 ---
 
 For architecture, CLI reference, output format, and pipeline details, see the [technical README](financial_api/README.md).

@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-07-02
+
+### Added
+- FastAPI REST layer (`app/api.py`): `GET /health`, `POST /extract`, `POST /extract/compare` — exposes the extractor as an HTTP service
+- `fastapi` and `uvicorn` added to `requirements.txt` (optional — only needed to run the API)
+
+---
+
 ## [0.2.0] — 2026-06-16
 
 ### Added

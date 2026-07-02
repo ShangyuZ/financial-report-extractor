@@ -7,5 +7,9 @@ pydantic>=2.0.0,<3.0.0
 # PDF text extraction (optional — only needed for --file *.pdf)
 pypdf>=4.0.0,<6.0.0
 
+# REST API layer (optional — only needed to run app/api.py)
+fastapi>=0.110.0,<1.0.0
+uvicorn>=0.29.0,<1.0.0
+
 # Development / testing (not required at runtime)
 # pytest>=8.0.0
